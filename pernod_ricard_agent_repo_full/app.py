@@ -248,8 +248,8 @@ if analyze_btn or "last_analysis" in st.session_state:
                 st.link_button("Open Source", source.get('url', '#'))
         
         # Export
-st.divider()
-
+        st.divider()
+        
         import json
         sources_json = json.dumps(filtered, indent=2, ensure_ascii=False)
         
