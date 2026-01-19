@@ -1,0 +1,40 @@
+# E-Commerce Intelligence Tool - Requirements
+# Version 2.0
+
+# Web Framework
+streamlit>=1.30.0
+
+# HTTP & Scraping
+requests>=2.31.0
+httpx>=0.25.0
+beautifulsoup4>=4.12.0
+readability-lxml>=0.8.1
+
+# RSS & Feeds
+feedparser>=6.0.10
+
+# Date/Time
+python-dateutil>=2.8.2
+
+# OpenAI
+openai>=1.30.0
+
+# Database
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.0
+
+# Data Processing
+pandas>=2.0.0
+
+# Validation & Models
+pydantic>=2.5.0
+
+# Environment
+python-dotenv>=1.0.1
+
+# Testing (optional for local development)
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+
+# Visualization (optional)
+plotly>=5.18.0
