@@ -1,336 +1,449 @@
-# E-Commerce Intelligence Tool - MVP UI
-# Version 2.0 - Multi-Company Support
+"""
+E-commerce Intelligence Dashboard
 
-import os
-import sys
+Multi-company e-commerce analysis tool with 7-layer anti-hallucination system.
+"""
+
 import streamlit as st
+import json
+import pandas as pd
 from datetime import datetime
+import sys
+import os
+import traceback
 
-# Add parent directory to path for imports
+# Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-# Import scraper
-try:
-    from core.scraper import CompanyIntelligenceScraper
-    SCRAPER_AVAILABLE = True
-except Exception as e:
-    SCRAPER_AVAILABLE = False
-    SCRAPER_ERROR = str(e)
+from core.analysis_engine import AnalysisEngine
 
-# Page config
+
+# ==============================================================================
+# PAGE CONFIG
+# ==============================================================================
+
 st.set_page_config(
-    page_title="E-Commerce Intelligence Tool",
+    page_title="E-commerce Intelligence",
     page_icon="🛒",
     layout="wide"
 )
 
-# Header
-st.title("🛒 E-Commerce Intelligence Tool")
-st.caption("AI-powered market intelligence for EU/DE E-Commerce")
 
-# Sidebar
+# ==============================================================================
+# SIDEBAR CONFIG
+# ==============================================================================
+
 with st.sidebar:
-    st.header("🔍 Company Analysis")
+    st.title("⚙️ Settings")
     
+    st.markdown("""
+    ### Analysis Configuration
+    
+    **Region Focus:** 🇪🇺 EU (especially Germany)
+    
+    This tool is optimized for European e-commerce intelligence.
+    """)
+    
+    lookback_days = st.slider(
+        "Lookback Period (days)",
+        min_value=7,
+        max_value=90,
+        value=30,
+        help="How far back to search for news"
+    )
+    
+    max_sources = st.slider(
+        "Max Sources",
+        min_value=10,
+        max_value=100,
+        value=30,
+        help="Maximum number of sources to analyze"
+    )
+    
+    show_debug = st.checkbox(
+        "Show Debug Info",
+        value=False,
+        help="Display technical details and validation stats"
+    )
+    
+    st.markdown("---")
+    st.markdown("""
+    ### About
+    
+    Multi-company e-commerce intelligence with strict fact validation.
+    
+    **Anti-Hallucination System:**
+    - ✅ Source verification
+    - ✅ Citation enforcement
+    - ✅ Structured extraction
+    - ✅ Confidence filtering
+    - ✅ Cross-referencing
+    - ✅ LLM fact-checking
+    """)
+
+
+# ==============================================================================
+# MAIN APP
+# ==============================================================================
+
+st.title("🛒 E-commerce Intelligence Tool")
+st.markdown("**Discover factual e-commerce signals for any company**")
+
+# Company input
+col1, col2 = st.columns([3, 1])
+
+with col1:
     company_name = st.text_input(
         "Company Name",
-        placeholder="e.g., Coca-Cola, Zalando, Unilever",
+        value="",
+        placeholder="e.g., Zalando, Amazon, Shopify",
         help="Enter any company name to analyze"
     )
-    
-    with st.expander("⚙️ Advanced Options"):
-        lookback_days = st.slider("Lookback (days)", 7, 30, 14)
-        max_per_source = st.slider("Max sources per type", 5, 20, 10)
-        
-        domain = st.text_input("Domain (optional)", placeholder="example.com")
-        newsroom_url = st.text_input("Newsroom URL (optional)")
-        linkedin_url = st.text_input("LinkedIn URL (optional)")
-    
-    analyze_btn = st.button(
-        "🚀 Discover Sources",
-        type="primary",
-        disabled=not company_name,
-        use_container_width=True
-    )
-    
-    st.divider()
-    
-    st.info("""
-    **🇪🇺 EU/DE Market Focus**
-    
-    This tool specializes in:
-    • European markets (14 countries)
-    • E-Commerce & Retail Media
-    • Marketplaces (Amazon, Zalando)
-    • D2C & Digital Commerce
-    """)
-    
-    # Show model info
-    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-    st.caption(f"🤖 Model: {model}")
 
-# Main content
-if not SCRAPER_AVAILABLE:
-    st.error(f"""
-    ❌ **Scraper not available**
-    
-    Error: {SCRAPER_ERROR}
-    
-    Please check that all dependencies are installed:
-    ```
-    pip install -r requirements.txt
-    ```
-    """)
-    st.stop()
+with col2:
+    st.markdown("<br>", unsafe_allow_html=True)
+    analyze_button = st.button("🚀 Analyze", type="primary", use_container_width=True)
 
-# Welcome screen
-if not company_name:
-    st.markdown("""
-    ## 👋 Welcome!
-    
-    This tool helps you discover and analyze E-Commerce intelligence for any company.
-    
-    ### 🚀 How it works:
-    
-    1. **Enter a company name** in the sidebar
-    2. **Click "Discover Sources"** to start
-    3. **View discovered sources** from multiple channels
-    
-    ### 📊 What you get:
-    
-    - 📰 **Google News** (14 EU editions)
-    - 💼 **LinkedIn** posts and updates
-    - 🏢 **Company Newsroom** articles
-    - 🛒 **E-Commerce** focused content
-    
-    ### 🔒 Privacy:
-    
-    - No data is stored without your consent
-    - API calls are made via your OpenAI key
-    - All sources are public information
-    
-    ---
-    
-    **👈 Enter a company name to get started!**
-    """)
-    
-    # Show example companies
-    st.subheader("💡 Try these examples:")
-    cols = st.columns(4)
-    example_companies = ["Coca-Cola", "Zalando", "Unilever", "LVMH"]
-    for col, company in zip(cols, example_companies):
-        if col.button(company, use_container_width=True):
-            st.rerun()
-    
-    st.stop()
 
-# Run analysis
-if analyze_btn or "last_analysis" in st.session_state:
-    
+# ==============================================================================
+# RUN ANALYSIS
+# ==============================================================================
+
+if analyze_button and company_name:
     # Build config
     config = {
-        "lookback_days": lookback_days,
-        "max_per_source": max_per_source
+        'lookback_days': lookback_days,
+        'max_sources': max_sources
     }
     
-    if domain:
-        config["domain"] = domain
-    if newsroom_url:
-        config["newsroom_url"] = newsroom_url
-    if linkedin_url:
-        config["linkedin_url"] = linkedin_url
+    # Progress tracking
+    progress_bar = st.progress(0)
+    status_text = st.empty()
     
-    # Store in session
-    if analyze_btn:
-        st.session_state["last_analysis"] = {
-            "company": company_name,
-            "config": config,
-            "timestamp": datetime.now()
-        }
+    def update_progress(message: str, percent: float):
+        """Progress callback."""
+        progress_bar.progress(percent)
+        status_text.info(f"**{message}**")
     
-    # Get from session
-    analysis = st.session_state.get("last_analysis")
-    if not analysis:
+    try:
+        # Run analysis
+        engine = AnalysisEngine(
+            company_name=company_name,
+            config=config,
+            progress_callback=update_progress
+        )
+        
+        result = engine.run_analysis()
+        
+        # Clear progress
+        progress_bar.empty()
+        status_text.empty()
+        
+        # Check status
+        if result['status'] != 'success':
+            st.warning(f"⚠️ Analysis completed with issues: {result['status']}")
+            if not result['signals']:
+                st.info("""
+                **No signals found.** This could mean:
+                - Company not well-known or limited recent news
+                - Try adjusting lookback period
+                - Check company name spelling
+                """)
+        
+        # Store result in session
+        st.session_state['last_result'] = result
+        st.session_state['last_company'] = company_name
+        
+    except Exception as e:
+        st.error(f"❌ Analysis failed: {str(e)}")
+        if show_debug:
+            st.code(traceback.format_exc(), language="python")
         st.stop()
-    
-    company_name = analysis["company"]
-    config = analysis["config"]
-    
-    st.header(f"📊 Analysis: {company_name}")
-    
-    # Progress
-    with st.spinner("🔍 Discovering sources..."):
-        try:
-            import traceback
-            
-            st.info("Creating scraper...")
-            scraper = CompanyIntelligenceScraper(company_name, config)
-            
-            st.info("Discovering sources...")
-            sources = scraper.discover_all_sources()
-            
-            st.info("Getting stats...")
-            stats = scraper.get_stats()
-            
-            st.info(f"Found {len(sources)} sources!")
-            
-        except Exception as e:
-            st.error(f"""
-            ❌ **Discovery failed**
-            
-            **Error:** {str(e)}
-            
-            **Type:** {type(e).__name__}
-            
-            **Traceback:**
-            ```
-            {traceback.format_exc()}
-            ```
-            
-            Please check:
-            - OpenAI API Key is set correctly
-            - Internet connection is available
-            - No rate limits reached
-            """)
-            st.stop()
 
-    # Success message
-    if len(sources) == 0:
-        st.warning(f"""
-        ⚠️ **No sources found for {company_name}**
-        
-        This could mean:
-        - Company name is not well-known or misspelled
-        - No recent news in the lookback period ({lookback_days} days)
-        - Try adjusting your settings or company name
-        
-        **Stats:**
-        - Google News: {stats.get('google_news', 0)}
-        - LinkedIn: {stats.get('linkedin', 0)}
-        - Newsroom: {stats.get('newsroom', 0)}
-        """)
-        
-        if stats.get("errors"):
-            with st.expander("🐛 Errors encountered"):
-                for err in stats["errors"]:
-                    st.error(err)
-        
-        st.stop()
+
+# ==============================================================================
+# DISPLAY RESULTS
+# ==============================================================================
+
+if 'last_result' in st.session_state:
+    result = st.session_state['last_result']
+    company = st.session_state.get('last_company', 'Unknown')
     
-    st.success(f"✅ Discovered {len(sources)} sources!")
+    st.markdown("---")
+    st.header(f"📊 Analysis Results: {company}")
     
-    # KPIs
-    col1, col2, col3, col4, col5 = st.columns(5)
+    # Summary metrics
+    stats = result.get('stats', {})
+    report = result.get('report', {})
+    summary = report.get('summary', {}) if report else {}
+    
+    col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        st.metric("Total Sources", len(sources))
+        st.metric(
+            "Sources Analyzed",
+            stats.get('source_count', 0)
+        )
     
     with col2:
-        eu_count = sum(1 for s in sources if "gnews:de:" in s.get("source", "") or "gnews:at:" in s.get("source", ""))
-        st.metric("EU Sources", eu_count)
+        st.metric(
+            "High-Confidence Signals",
+            summary.get('high_confidence_signals', 0)
+        )
     
     with col3:
-        st.metric("Google News", stats.get("google_news", 0))
+        st.metric(
+            "Metrics Covered",
+            summary.get('metrics_covered', 0)
+        )
     
     with col4:
-        st.metric("LinkedIn", stats.get("linkedin", 0))
+        duration = stats.get('duration_seconds', 0)
+        st.metric(
+            "Analysis Time",
+            f"{duration:.1f}s" if duration else "N/A"
+        )
     
-    with col5:
-        st.metric("Newsroom", stats.get("newsroom", 0))
+    # Tabs for different views
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "📈 Signals",
+        "📰 Sources",
+        "📊 Report",
+        "💾 Export"
+    ])
     
-    # Errors
-    if stats.get("errors"):
-        with st.expander(f"⚠️ Warnings ({len(stats['errors'])})"):
-            for err in stats["errors"]:
-                st.warning(err)
-    
-    st.divider()
-
-    # Sources table
-    st.subheader("📚 Discovered Sources")
-    
-    if sources:
-        # Filters
-        col1, col2 = st.columns([3, 1])
+    # TAB 1: SIGNALS
+    with tab1:
+        signals = result.get('signals', [])
         
-        with col1:
-            search = st.text_input("🔍 Search", placeholder="Search in titles or URLs...")
+        if not signals:
+            st.info("No high-confidence signals found.")
+        else:
+            st.subheader(f"Found {len(signals)} High-Confidence Signals")
+            
+            # Filters
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                # Get unique metrics
+                metrics = list(set(
+                    s.get('value', {}).get('metric', 'unknown')
+                    for s in signals
+                ))
+                selected_metric = st.selectbox(
+                    "Filter by Metric",
+                    options=['All'] + sorted(metrics)
+                )
+            
+            with col2:
+                # Get unique regions
+                regions = list(set(
+                    s.get('value', {}).get('region', 'Unknown')
+                    for s in signals
+                ))
+                selected_region = st.selectbox(
+                    "Filter by Region",
+                    options=['All'] + sorted(regions)
+                )
+            
+            # Apply filters
+            filtered_signals = signals
+            if selected_metric != 'All':
+                filtered_signals = [
+                    s for s in filtered_signals
+                    if s.get('value', {}).get('metric') == selected_metric
+                ]
+            if selected_region != 'All':
+                filtered_signals = [
+                    s for s in filtered_signals
+                    if s.get('value', {}).get('region') == selected_region
+                ]
+            
+            # Display signals
+            for i, signal in enumerate(filtered_signals, 1):
+                value = signal.get('value', {})
+                
+                with st.expander(
+                    f"**{i}. {value.get('metric', 'Unknown')}** - "
+                    f"{value.get('numeric_value', 'N/A')} {value.get('unit', '')} "
+                    f"[{signal.get('confidence', 0)*100:.0f}% confidence]"
+                ):
+                    # Main info
+                    col1, col2 = st.columns([2, 1])
+                    
+                    with col1:
+                        st.markdown(f"**Metric:** {value.get('metric', 'N/A')}")
+                        st.markdown(f"**Value:** {value.get('numeric_value', 'N/A')} {value.get('unit', '')}")
+                        st.markdown(f"**Period:** {value.get('period', 'N/A')}")
+                        st.markdown(f"**Region:** {value.get('region', 'N/A')}")
+                        
+                        if value.get('context'):
+                            st.markdown(f"**Context:** {value['context']}")
+                    
+                    with col2:
+                        conf = signal.get('confidence', 0)
+                        st.metric("Confidence", f"{conf*100:.1f}%")
+                        
+                        # Validation badges
+                        if signal.get('citation_valid'):
+                            st.success("✓ Citation verified")
+                        
+                        corr_count = signal.get('corroboration_count', 0)
+                        if corr_count > 0:
+                            st.info(f"🔗 {corr_count} corroborating sources")
+                        
+                        llm_ver = signal.get('llm_verification', {})
+                        if llm_ver.get('verified'):
+                            st.success("✓ LLM verified")
+                    
+                    # Quote
+                    st.markdown("**Verbatim Quote:**")
+                    st.markdown(f"> {signal.get('verbatim_quote', 'N/A')}")
+                    
+                    # Source
+                    st.markdown(f"**Source:** [{signal.get('source_title', 'Unknown')}]({signal.get('source_url', '#')})")
+                    
+                    # Debug info
+                    if show_debug:
+                        st.json(signal)
+    
+    # TAB 2: SOURCES
+    with tab2:
+        sources = result.get('sources', [])
         
-        with col2:
-            source_filter = st.multiselect(
-                "Filter by type",
-                options=list(set(s.get("source", "unknown") for s in sources)),
-                default=[]
+        if not sources:
+            st.info("No sources found.")
+else:
+            st.subheader(f"Analyzed {len(sources)} Sources")
+            
+            # Create DataFrame
+            source_data = []
+            for src in sources:
+                source_data.append({
+                    'Title': src.get('title', 'N/A')[:60],
+                    'Type': src.get('type', 'unknown'),
+                    'URL': src.get('url', 'N/A'),
+                    'Date': src.get('published_date', 'N/A')
+                })
+            
+            df = pd.DataFrame(source_data)
+            
+            # Display table
+            st.dataframe(
+                df,
+                use_container_width=True,
+                hide_index=True
             )
-        
-        # Apply filters
-        filtered = sources
-        
-        if search:
-            search_lower = search.lower()
-            filtered = [
-                s for s in filtered
-                if search_lower in s.get("title", "").lower() or search_lower in s.get("url", "").lower()
-            ]
-        
-        if source_filter:
-            filtered = [s for s in filtered if s.get("source") in source_filter]
-        
-        st.caption(f"Showing {len(filtered)} of {len(sources)} sources")
-        
-        # Display sources
-        for i, source in enumerate(filtered, 1):
-            with st.expander(f"{i}. {source.get('title', 'Untitled')}"):
-                st.markdown(f"**URL:** {source.get('url', 'N/A')}")
-                st.markdown(f"**Source:** `{source.get('source', 'unknown')}`")
+            
+            # Source details
+            if show_debug:
+                st.markdown("### Source Details")
+                for i, src in enumerate(sources[:5], 1):  # Show first 5
+                    with st.expander(f"{i}. {src.get('title', 'Unknown')[:80]}"):
+                        st.json(src)
+    
+    # TAB 3: REPORT
+    with tab3:
+        if not report:
+            st.info("Report not available.")
+        else:
+            st.subheader("Analysis Report")
+            
+            # Summary
+            st.markdown("### Summary")
+            summary_df = pd.DataFrame([
+                {"Metric": k.replace('_', ' ').title(), "Value": v}
+                for k, v in summary.items()
+                if not isinstance(v, dict)
+            ])
+            st.dataframe(summary_df, use_container_width=True, hide_index=True)
+            
+            # Signals by metric
+            if report.get('signals_by_metric'):
+                st.markdown("### Signals by Metric Type")
                 
-                if source.get('published_at'):
-                    st.markdown(f"**Published:** {source['published_at']}")
+                metric_counts = {
+                    metric: len(sigs)
+                    for metric, sigs in report['signals_by_metric'].items()
+                }
                 
-                st.link_button("Open Source", source.get('url', '#'))
-        
-        # Export
-        st.divider()
-        
-        import json
-        sources_json = json.dumps(filtered, indent=2, ensure_ascii=False)
+                metric_df = pd.DataFrame([
+                    {"Metric": m, "Count": c}
+                    for m, c in sorted(metric_counts.items(), key=lambda x: -x[1])
+                ])
+                
+                st.dataframe(metric_df, use_container_width=True, hide_index=True)
+            
+            # Validation stats
+            if show_debug and report.get('validation_stats'):
+                st.markdown("### Validation Statistics")
+                st.json(report['validation_stats'])
+    
+    # TAB 4: EXPORT
+    with tab4:
+        st.subheader("Export Results")
         
         col1, col2 = st.columns(2)
         
         with col1:
+            # JSON export
+            json_str = json.dumps(result, indent=2, ensure_ascii=False)
             st.download_button(
-                "📥 Download as JSON",
-                sources_json.encode('utf-8'),
-                f"{company_name}_sources.json",
-                "application/json",
-                use_container_width=True
+                label="📥 Download as JSON",
+                data=json_str,
+                file_name=f"{company.lower().replace(' ', '_')}_analysis.json",
+                mime="application/json"
             )
         
         with col2:
-            # Simple CSV
-            csv_lines = ["Title,URL,Source,Published\n"]
-            for s in filtered:
-                title = s.get('title', '').replace(',', ';')
-                url = s.get('url', '')
-                source = s.get('source', '')
-                published = s.get('published_at', '')
-                csv_lines.append(f'"{title}","{url}","{source}","{published}"\n')
-            csv_data = ''.join(csv_lines)
-            
-            st.download_button(
-                "📥 Download as CSV",
-                csv_data.encode('utf-8'),
-                f"{company_name}_sources.csv",
-                "text/csv",
-                use_container_width=True
-            )
-    else:
-        st.info("No sources found. Try adjusting your filters or lookback period.")
+            # CSV export (signals only)
+            signals = result.get('signals', [])
+            if signals:
+                # Flatten signals for CSV
+                csv_data = []
+                for sig in signals:
+                    val = sig.get('value', {})
+                    csv_data.append({
+                        'Metric': val.get('metric', ''),
+                        'Value': val.get('numeric_value', ''),
+                        'Unit': val.get('unit', ''),
+                        'Period': val.get('period', ''),
+                        'Region': val.get('region', ''),
+                        'Confidence': sig.get('confidence', 0),
+                        'Quote': sig.get('verbatim_quote', ''),
+                        'Source': sig.get('source_title', ''),
+                        'URL': sig.get('source_url', '')
+                    })
+                
+                df = pd.DataFrame(csv_data)
+                csv_str = df.to_csv(index=False)
+                
+                st.download_button(
+                    label="📥 Download Signals as CSV",
+                    data=csv_str,
+                    file_name=f"{company.lower().replace(' ', '_')}_signals.csv",
+                    mime="text/csv"
+                )
+            else:
+                st.info("No signals to export.")
+        
+        # Show preview
+        if show_debug:
+            st.markdown("### Export Preview (JSON)")
+            st.code(json_str[:1000] + "\n...", language="json")
 
-# Footer
-st.divider()
-st.caption(f"""
-E-Commerce Intelligence Tool v2.0 | 
-Powered by OpenAI {os.getenv("OPENAI_MODEL", "gpt-4o-mini")} | 
-Last updated: {datetime.now().strftime("%Y-%m-%d %H:%M")}
-""")
+
+# ==============================================================================
+# FOOTER
+# ==============================================================================
+
+st.markdown("---")
+st.markdown("""
+<div style='text-align: center; color: #666;'>
+    <small>
+    E-commerce Intelligence Tool | 
+    7-Layer Anti-Hallucination System | 
+    Optimized for 🇪🇺 EU Markets
+    </small>
+</div>
+""", unsafe_allow_html=True)

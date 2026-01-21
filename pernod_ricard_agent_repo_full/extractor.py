@@ -1,185 +1,278 @@
-# extractor.py
 """
-Extrahiert strukturierte Signale (Financials, RegionalPerformance, etc.)
-aus Rohtext mithilfe eines LLM. Liest OPENAI_API_KEY aus .env oder
-Streamlit Secrets. Erwartet die Prompt-Datei unter prompts/extract_prompt.txt.
+Signal Extractor - Multi-Company E-commerce Intelligence
+
+Extracts structured signals from articles using LLM with strict anti-hallucination measures.
+Supports any company (not just Pernod Ricard).
 """
 
-from __future__ import annotations
 import os
-import re
 import json
-from typing import List, Optional
+import re
+from typing import Optional, List
+from pathlib import Path
 
-# .env laden (lokal)
+# Environment setup
 from dotenv import load_dotenv
 load_dotenv()
 
-# Streamlit-Secrets als Fallback
+# Streamlit secrets fallback
 try:
-    import streamlit as st  # type: ignore
-except Exception:
-    st = None  # Streamlit ist lokal evtl. nicht installiert
+    import streamlit as st
+except ImportError:
+    st = None
 
-# OpenAI-Client initialisieren
-import openai
+# OpenAI client
+try:
+    from openai import OpenAI
+except ImportError:
+    OpenAI = None
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-if not OPENAI_API_KEY and st is not None and "OPENAI_API_KEY" in st.secrets:
-    OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
+# Pydantic models
+from models.signal_models import Signal, SignalValue
 
-if not OPENAI_API_KEY:
+
+class SignalExtractor:
+    """
+    Extracts signals from article text using LLM.
+    
+    Enforces strict validation to prevent hallucination:
+    - Uses specialized extraction prompt
+    - Validates against Pydantic schema
+    - Requires verbatim quotes
+    - Conservative confidence scores
+    """
+    
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: str = "gpt-4o-mini",
+        prompt_file: str = "extract_signals_v2.txt"
+    ):
+        """
+        Initialize extractor.
+        
+        Args:
+            api_key: OpenAI API key (or from env/secrets)
+            model: Model to use
+            prompt_file: Prompt filename in prompts/ directory
+        """
+        # Get API key
+        if not api_key:
+            api_key = os.getenv('OPENAI_API_KEY')
+        if not api_key and st is not None:
+            api_key = st.secrets.get('OPENAI_API_KEY')
+        
+        if not api_key:
     raise RuntimeError(
-        "OPENAI_API_KEY not set. Hinterlege ihn lokal in .env oder in Streamlit Cloud unter Secrets."
-    )
-
-openai.api_key = OPENAI_API_KEY
-
-# -----------------------------
-# Modelle (Pydantic)
-# -----------------------------
-from pydantic import BaseModel, ValidationError, Field
-
-
-class Signal(BaseModel):
-    type: str = Field(..., description="Signaltyp, z. B. Financials, Restructuring, ...")
-    value: dict = Field(..., description="Strukturierte Payload (Zahl, Einheit, Zeitraum, Notizen).")
-    verbatim: Optional[str] = Field(None, description="Kurzes Belegzitat (<=20 Wörter).")
-    confidence: float = Field(..., ge=0.0, le=1.0, description="0..1 Vertrauensgrad")
-
-
-class ExtractionResult(BaseModel):
-    company: str
-    signals: List[Signal]
-    detected_at: Optional[str] = None
-
-
-# -----------------------------
-# Prompt laden
-# -----------------------------
-def _load_prompt() -> str:
-    # Robuster Pfad: funktioniert auch, wenn Skript woanders aufgerufen wird
-    here = os.path.dirname(os.path.abspath(__file__))
-    prompt_path = os.path.join(here, "prompts", "extract_prompt.txt")
-    if not os.path.exists(prompt_path):
-        raise FileNotFoundError(
-            f"Prompt-Datei nicht gefunden: {prompt_path}. "
-            "Lege sie unter prompts/extract_prompt.txt ab."
+                "OPENAI_API_KEY not set. Set in .env or Streamlit secrets."
+            )
+        
+        if not OpenAI:
+            raise RuntimeError("openai package not installed. Run: pip install openai")
+        
+        self.client = OpenAI(api_key=api_key)
+        self.model = model
+        
+        # Load prompt template
+        prompt_path = Path(__file__).parent / "prompts" / prompt_file
+        if not prompt_path.exists():
+            raise FileNotFoundError(f"Prompt file not found: {prompt_path}")
+        
+        self.prompt_template = prompt_path.read_text(encoding='utf-8')
+        
+        # Stats
+        self.stats = {
+            'articles_processed': 0,
+            'signals_extracted': 0,
+            'validation_failures': 0,
+            'api_errors': 0
+        }
+    
+    def extract_from_article(
+        self,
+        article_text: str,
+        article_title: str,
+        article_url: str,
+        company_name: str
+    ) -> List[Signal]:
+        """
+        Extract signals from a single article.
+        
+        Args:
+            article_text: Full article text
+            article_title: Article title
+            article_url: Article URL
+            company_name: Company being analyzed
+        
+        Returns:
+            List of validated Signal objects
+        """
+        self.stats['articles_processed'] += 1
+        
+        # Build prompt
+        prompt = self.prompt_template.format(
+            company_name=company_name,
+            article_text=article_text[:8000],  # Limit context
+            article_title=article_title,
+            article_url=article_url
         )
-    with open(prompt_path, "r", encoding="utf-8") as f:
-        return f.read()
-
-
-# -----------------------------
-# JSON-Parsing Hilfen
-# -----------------------------
-_JSON_BLOCK_RE = re.compile(
-    r"(?:```json\s*)?(\{[\s\S]*\})(?:\s*```)?", re.IGNORECASE
-)
-
-
-def _coerce_json(payload: str) -> dict:
-    """
-    Versucht mehrere Strategien, um valides JSON aus einem LLM-String zu gewinnen:
-    1) Direkt json.loads
-    2) JSON-Block zwischen ```json ... ``` extrahieren
-    3) Größtes {...}-Objekt per Regex extrahieren
-    """
-    # 1) Direkt
-    try:
-        return json.loads(payload)
-    except Exception:
-        pass
-
-    # 2/3) Codefence oder größtes Objekt
-    m = _JSON_BLOCK_RE.search(payload)
-    if m:
-        candidate = m.group(1)
+        
         try:
-            return json.loads(candidate)
-        except Exception:
-            # Letzter Rettungsanker: geschweifte Klammern austarieren
-            pass
+            # Call LLM
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are a rigorous fact extractor. Only extract explicitly stated facts with exact quotes."
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.0,
+                max_tokens=2000
+            )
+            
+            # Parse response
+            content = response.choices[0].message.content
+            data = json.loads(content)
+            
+            # Extract signals array
+            signals_raw = data.get('signals', [])
+            if not signals_raw:
+                return []
+            
+            # Validate each signal with Pydantic
+            validated_signals = []
+            
+            for signal_data in signals_raw:
+                try:
+                    # Pydantic validation (strict schema)
+                    signal = Signal(**signal_data)
+                    validated_signals.append(signal)
+                    self.stats['signals_extracted'] += 1
+                    
+                except Exception as e:
+                    # Validation failed - skip this signal
+                    self.stats['validation_failures'] += 1
+                    continue
+            
+            return validated_signals
+        
+        except Exception as e:
+            self.stats['api_errors'] += 1
+            # Return empty list on error (graceful degradation)
+            return []
+    
+    def extract_from_sources(
+        self,
+        sources: List[dict],
+        company_name: str
+    ) -> List[dict]:
+        """
+        Extract signals from multiple sources.
+        
+        Args:
+            sources: List of source dicts with 'text', 'title', 'url'
+            company_name: Company being analyzed
+        
+        Returns:
+            List of signal dicts (serialized Pydantic models)
+        """
+        all_signals = []
+        
+        for source in sources:
+            text = source.get('text') or source.get('raw_text', '')
+            title = source.get('title', '')
+            url = source.get('url', '')
+            
+            if not text or len(text) < 100:
+                continue
+            
+            # Extract signals
+            signals = self.extract_from_article(
+                article_text=text,
+                article_title=title,
+                article_url=url,
+                company_name=company_name
+            )
+            
+            # Convert to dicts for further processing
+            for signal in signals:
+                signal_dict = signal.model_dump()
+                all_signals.append(signal_dict)
+        
+        return all_signals
+    
+    def get_stats(self) -> dict:
+        """Get extraction statistics."""
+        return self.stats.copy()
 
-    # 4) Einfache Klammer-Balance-Heuristik (stabil bei einzelnen Top-Level-Objekten)
-    start = payload.find("{")
-    end = payload.rfind("}")
-    if start != -1 and end != -1 and end > start:
-        try:
-            return json.loads(payload[start : end + 1])
-        except Exception:
-            pass
 
-    raise ValueError("Konnte keine gültige JSON-Antwort aus dem LLM-Output extrahieren.")
+# ==============================================================================
+# CONVENIENCE FUNCTIONS
+# ==============================================================================
 
-
-# -----------------------------
-# LLM-Aufruf
-# -----------------------------
-def call_llm_extract(
-    text: str,
-    company: str = "Pernod Ricard",
-    model: str = "gpt-4o-mini",
-    max_tokens: int = 900,
-    temperature: float = 0.1,
-) -> ExtractionResult:
+def extract_signals(
+    sources: List[dict],
+    company_name: str,
+    api_key: Optional[str] = None
+) -> List[dict]:
     """
-    Ruft das LLM auf, erzwingt JSON-Output und validiert gegen Pydantic.
+    Convenience function: Extract signals from sources.
+    
+    Args:
+        sources: List of source dicts
+        company_name: Company name
+        api_key: Optional OpenAI API key
+    
+    Returns:
+        List of signal dicts
     """
-    base_prompt = _load_prompt()
-    prompt = (
-        base_prompt.replace("<<COMPANY>>", company)
-        .replace("<<SOURCE_TEXT>>", text[:40_000])  # Sicherheitslimit
-    )
-
-    # ChatCompletion (kompatibel mit vielen OpenAI-Versionen)
-    resp = openai.ChatCompletion.create(
-        model=model,
-        temperature=temperature,
-        messages=[
-            {"role": "system", "content": "Du bist ein faktenorientierter Extraktor. Antworte ausschließlich als JSON."},
-            {"role": "user", "content": prompt},
-        ],
-        max_tokens=max_tokens,
-    )
-
-    content = resp["choices"][0]["message"]["content"]
-    data = _coerce_json(content)
-
-    try:
-        result = ExtractionResult(**data)
-    except ValidationError as e:
-        # Für Debugging in Logs hilfreich
-        raise ValueError(f"Pydantic-Validierung fehlgeschlagen: {e}") from e
-
-    # Sanity-Check: Liste vorhanden, sonst leeres Array setzen
-    if result.signals is None:
-        result.signals = []
-
-    return result
+    extractor = SignalExtractor(api_key=api_key)
+    return extractor.extract_from_sources(sources, company_name)
 
 
-# -----------------------------
-# Convenience-Wrapper
-# -----------------------------
-def extract_signals(text: str, company: str = "Pernod Ricard") -> List[Signal]:
-    """
-    Liefert direkt die Liste der Signale (Kurzform).
-    """
-    res = call_llm_extract(text=text, company=company)
-    return res.signals
+# ==============================================================================
+# CLI TEST
+# ==============================================================================
 
-
-# -----------------------------
-# Optionaler CLI-Test
-# -----------------------------
 if __name__ == "__main__":
-    demo = (
-        "Pernod Ricard reports FY25 net sales €10.959bn "
-        "with organic growth -3.0%. China sales down about 21%."
-    )
+    # Test extraction
+    test_article = """
+    ACME Corp Announces Strong Q4 Results
+    
+    San Francisco, Jan 15, 2026 - ACME Corp reported record quarterly revenue 
+    of $2.5 billion for Q4 2025, representing 18% year-over-year growth.
+    
+    The company's e-commerce division was a key driver, with online sales 
+    increasing 32% compared to Q4 2024. In Europe, ACME saw particularly 
+    strong performance, with German market revenue up 25% to €450 million.
+    
+    "Our digital transformation is paying off," said CEO Jane Smith. 
+    "We're seeing strong momentum across all channels."
+    """
+    
     try:
-        out = call_llm_extract(demo, company="Pernod Ricard")
-        print(json.dumps(out.dict(), indent=2, ensure_ascii=False))
-    except Exception as exc:
-        print("Extraction error:", exc)
+        extractor = SignalExtractor()
+        signals = extractor.extract_from_article(
+            article_text=test_article,
+            article_title="ACME Corp Q4 Results",
+            article_url="https://example.com/acme-q4",
+            company_name="ACME Corp"
+        )
+        
+        print(f"✅ Extracted {len(signals)} signals:")
+        for i, sig in enumerate(signals, 1):
+            print(f"\n{i}. {sig.value.metric}")
+            print(f"   Value: {sig.value.numeric_value} {sig.value.unit}")
+            print(f"   Confidence: {sig.confidence:.0%}")
+            print(f"   Quote: {sig.verbatim_quote[:100]}...")
+        
+        print(f"\n📊 Stats: {extractor.get_stats()}")
+    
+    except Exception as e:
+        print(f"❌ Error: {e}")
