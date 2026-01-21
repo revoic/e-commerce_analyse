@@ -161,20 +161,62 @@ if analyze_btn or "last_analysis" in st.session_state:
     # Progress
     with st.spinner("🔍 Discovering sources..."):
         try:
+            import traceback
+            
+            st.info("Creating scraper...")
             scraper = CompanyIntelligenceScraper(company_name, config)
+            
+            st.info("Discovering sources...")
             sources = scraper.discover_all_sources()
+            
+            st.info("Getting stats...")
             stats = scraper.get_stats()
+            
+            st.info(f"Found {len(sources)} sources!")
+            
         except Exception as e:
             st.error(f"""
             ❌ **Discovery failed**
             
-            Error: {e}
+            **Error:** {str(e)}
             
-            Please try again or adjust your settings.
+            **Type:** {type(e).__name__}
+            
+            **Traceback:**
+            ```
+            {traceback.format_exc()}
+            ```
+            
+            Please check:
+            - OpenAI API Key is set correctly
+            - Internet connection is available
+            - No rate limits reached
             """)
-    st.stop()
+            st.stop()
 
-    # Success
+    # Success message
+    if len(sources) == 0:
+        st.warning(f"""
+        ⚠️ **No sources found for {company_name}**
+        
+        This could mean:
+        - Company name is not well-known or misspelled
+        - No recent news in the lookback period ({lookback_days} days)
+        - Try adjusting your settings or company name
+        
+        **Stats:**
+        - Google News: {stats.get('google_news', 0)}
+        - LinkedIn: {stats.get('linkedin', 0)}
+        - Newsroom: {stats.get('newsroom', 0)}
+        """)
+        
+        if stats.get("errors"):
+            with st.expander("🐛 Errors encountered"):
+                for err in stats["errors"]:
+                    st.error(err)
+        
+        st.stop()
+    
     st.success(f"✅ Discovered {len(sources)} sources!")
     
     # KPIs
