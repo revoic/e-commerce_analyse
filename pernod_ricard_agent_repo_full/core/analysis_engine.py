@@ -204,7 +204,7 @@ class AnalysisEngine:
             'signals_by_metric': {},
             'all_high_confidence_signals': [],
             'validation_stats': {
-                'scraper': self.scraper.get_discovery_stats() if hasattr(self, 'scraper') else {},
+                'scraper': self.scraper.get_stats() if hasattr(self, 'scraper') else {},
                 'extractor': self.extractor.get_stats() if hasattr(self, 'extractor') else {},
                 'error': reason
             }
