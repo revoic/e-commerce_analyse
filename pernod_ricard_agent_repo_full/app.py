@@ -19,6 +19,26 @@ from core.analysis_engine import AnalysisEngine
 
 
 # ==============================================================================
+# HELPER FUNCTIONS
+# ==============================================================================
+
+def make_json_safe(obj):
+    """Convert non-serializable objects to JSON-safe format."""
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    elif isinstance(obj, dict):
+        return {k: make_json_safe(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return [make_json_safe(item) for item in obj]
+    elif hasattr(obj, 'model_dump'):  # Pydantic model
+        return make_json_safe(obj.model_dump())
+    elif hasattr(obj, '__dict__'):  # Other objects
+        return make_json_safe(obj.__dict__)
+    else:
+        return obj
+
+
+# ==============================================================================
 # PAGE CONFIG
 # ==============================================================================
 
@@ -386,8 +406,9 @@ if 'last_result' in st.session_state:
         col1, col2 = st.columns(2)
         
         with col1:
-            # JSON export
-            json_str = json.dumps(result, indent=2, ensure_ascii=False)
+            # JSON export (make sure it's JSON-safe)
+            safe_result = make_json_safe(result)
+            json_str = json.dumps(safe_result, indent=2, ensure_ascii=False)
             st.download_button(
                 label="📥 Download as JSON",
                 data=json_str,
