@@ -62,13 +62,9 @@ class AnalysisEngine:
         self.config = config or {}
         self.progress_callback = progress_callback or (lambda msg, pct: None)
         
-        # Initialize components
+        # Initialize components (validators will be created after we have sources)
         self.scraper = CompanyIntelligenceScraper(company_name, config)
         self.extractor = SignalExtractor()
-        self.citation_validator = CitationValidator()
-        self.confidence_filter = ConfidenceFilter()
-        self.cross_validator = CrossReferenceValidator()
-        self.fact_checker = LLMFactChecker()
         
         # Results
         self.sources = []
@@ -119,7 +115,8 @@ class AnalysisEngine:
             
             # Step 3: Citation validation (50-60%)
             self._progress("📝 Validating citations...", 0.50)
-            citation_results = self.citation_validator.validate_all_signals(
+            citation_validator = CitationValidator(self.sources)
+            citation_results = citation_validator.validate_all_signals(
                 self.raw_signals,
                 self.sources
             )
@@ -134,7 +131,8 @@ class AnalysisEngine:
             
             # Step 4: Cross-reference validation (60-70%)
             self._progress("🔗 Cross-referencing sources...", 0.60)
-            self.validated_signals = self.cross_validator.validate_signals_cross_reference(
+            cross_validator = CrossReferenceValidator()
+            self.validated_signals = cross_validator.validate_signals_cross_reference(
                 self.validated_signals,
                 self.sources
             )
@@ -142,7 +140,8 @@ class AnalysisEngine:
             
             # Step 5: LLM fact-checking (70-85%)
             self._progress("🔍 LLM fact-checking...", 0.70)
-            self.validated_signals = self.fact_checker.verify_signals(
+            fact_checker = LLMFactChecker()
+            self.validated_signals = fact_checker.verify_signals(
                 self.validated_signals,
                 self.sources
             )
@@ -150,7 +149,8 @@ class AnalysisEngine:
             
             # Step 6: Confidence filtering (85-90%)
             self._progress("📊 Filtering by confidence...", 0.85)
-            filter_results = self.confidence_filter.filter_signals(self.validated_signals)
+            confidence_filter = ConfidenceFilter()
+            filter_results = confidence_filter.filter_signals(self.validated_signals)
             self.final_signals = filter_results['high_confidence']
             self._progress(
                 f"✓ {len(self.final_signals)} high-confidence signals",
@@ -221,9 +221,9 @@ class AnalysisEngine:
             'validation_stats': {
                 'scraper': self.scraper.get_discovery_stats(),
                 'extractor': self.extractor.get_stats(),
-                'citation_validator': self.citation_validator.get_stats(),
-                'cross_reference': self.cross_validator.get_stats(),
-                'fact_checker': self.fact_checker.get_stats(),
+                'citation_validator': citation_validator.get_stats(),
+                'cross_reference': cross_validator.get_stats(),
+                'fact_checker': fact_checker.get_stats(),
                 'confidence_filter': filter_results['stats']
             }
         }
