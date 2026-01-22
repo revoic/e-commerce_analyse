@@ -28,10 +28,21 @@ from utils.url_utils import (
     normalize_url,
     is_eu_url,
     build_newsroom_candidates,
+    build_investor_relations_candidates,
+    build_earnings_report_candidates,
+    build_company_blog_candidates,
     is_valid_url,
+    is_investor_relations_url,
+    is_earnings_report_url,
     extract_domain
 )
 from utils.text_utils import hash_text, clean_whitespace, remove_html_tags
+from utils.pdf_utils import (
+    extract_text_from_pdf_url,
+    is_pdf_url,
+    is_earnings_report_pdf,
+    extract_key_metrics_from_text
+)
 
 
 # ==============================================================================
@@ -124,9 +135,12 @@ class CompanyIntelligenceScraper:
         
         # Statistics
         self.stats = {
-            "google_news": 0,
+            "investor_relations": 0,
+            "earnings_reports": 0,
+            "direct_newsroom": 0,
+            "bing_news": 0,
             "linkedin": 0,
-            "newsroom": 0,
+            "google_news": 0,
             "errors": []
         }
     
@@ -138,73 +152,118 @@ class CompanyIntelligenceScraper:
         """
         Discover sources from all available channels.
         
+        NEW PRIORITY STRATEGY (BETTER LONG-TERM):
+        1. Investor Relations pages (highest data quality)
+        2. Earnings Reports (PDFs with financial data)
+        3. Direct Newsroom RSS (no Google News proxy)
+        4. Bing News (fallback only)
+        5. LinkedIn (fallback only)
+        
         Returns:
             List of source dicts with keys:
                 - url: Source URL
                 - title: Article title
-                - source: Source type (e.g. "gnews:de:DE")
+                - source: Source type (e.g. "ir", "earnings", "newsroom")
                 - published_at: ISO timestamp (optional)
+                - priority: int (1=highest, 5=lowest)
         """
         all_sources = []
         
         print(f"\n🔍 Discovering sources for: {self.company_name}")
         print(f"   Domain: {self.domain}")
         print(f"   Lookback: {self.lookback_days} days")
+        print(f"\n💡 Strategy: IR > Earnings > Direct Newsroom > Bing News (Fallback)")
         
-        # 1. Google News (EU editions + E-Commerce)
-        print("\n📰 Google News...")
+        # ==========================================
+        # PRIORITY 1: INVESTOR RELATIONS
+        # ==========================================
+        print("\n📊 [P1] Investor Relations...")
         try:
-            gnews_sources = self._discover_google_news()
-            all_sources.extend(gnews_sources)
-            self.stats["google_news"] = len(gnews_sources)
-            print(f"   ✓ Found {len(gnews_sources)} items")
+            ir_sources = self._discover_investor_relations()
+            all_sources.extend(ir_sources)
+            self.stats["investor_relations"] = len(ir_sources)
+            print(f"   ✓ Found {len(ir_sources)} IR pages (HIGH QUALITY)")
         except Exception as e:
-            error_msg = f"Google News failed: {e}"
+            error_msg = f"IR discovery failed: {e}"
             print(f"   ✗ {error_msg}")
             self.stats["errors"].append(error_msg)
         
-        # 2. LinkedIn (via Google News site: search)
-        print("\n💼 LinkedIn...")
+        # ==========================================
+        # PRIORITY 2: EARNINGS REPORTS (PDFs)
+        # ==========================================
+        print("\n📈 [P2] Earnings Reports...")
+        try:
+            earnings_sources = self._discover_earnings_reports()
+            all_sources.extend(earnings_sources)
+            self.stats["earnings_reports"] = len(earnings_sources)
+            print(f"   ✓ Found {len(earnings_sources)} earnings reports (FINANCIAL DATA)")
+        except Exception as e:
+            error_msg = f"Earnings discovery failed: {e}"
+            print(f"   ✗ {error_msg}")
+            self.stats["errors"].append(error_msg)
+        
+        # ==========================================
+        # PRIORITY 3: DIRECT NEWSROOM (NO GOOGLE)
+        # ==========================================
+        print("\n🏢 [P3] Direct Newsroom RSS...")
+        try:
+            newsroom_sources = self._discover_direct_newsroom()
+            all_sources.extend(newsroom_sources)
+            self.stats["direct_newsroom"] = len(newsroom_sources)
+            print(f"   ✓ Found {len(newsroom_sources)} newsroom articles (OFFICIAL)")
+        except Exception as e:
+            error_msg = f"Direct newsroom failed: {e}"
+            print(f"   ✗ {error_msg}")
+            self.stats["errors"].append(error_msg)
+        
+        # ==========================================
+        # PRIORITY 4: BING NEWS (FALLBACK)
+        # ==========================================
+        print("\n🌐 [P4] Bing News (Fallback)...")
+        try:
+            bing_sources = self._discover_bing_news()
+            all_sources.extend(bing_sources)
+            self.stats["bing_news"] = len(bing_sources)
+            print(f"   ✓ Found {len(bing_sources)} Bing news articles (SUPPLEMENT)")
+        except Exception as e:
+            error_msg = f"Bing News failed: {e}"
+            print(f"   ℹ️  {error_msg} (non-critical)")
+            self.stats["errors"].append(error_msg)
+        
+        # ==========================================
+        # PRIORITY 5: LINKEDIN (FALLBACK)
+        # ==========================================
+        print("\n💼 [P5] LinkedIn (Fallback)...")
         try:
             linkedin_sources = self._discover_linkedin()
             all_sources.extend(linkedin_sources)
             self.stats["linkedin"] = len(linkedin_sources)
-            print(f"   ✓ Found {len(linkedin_sources)} items")
+            print(f"   ✓ Found {len(linkedin_sources)} LinkedIn posts (SOCIAL)")
         except Exception as e:
-            error_msg = f"LinkedIn discovery failed: {e}"
-            print(f"   ✗ {error_msg}")
-            self.stats["errors"].append(error_msg)
-        
-        # 3. Newsroom (auto-discovery or provided URL)
-        print("\n🏢 Newsroom...")
-        try:
-            newsroom_sources = self._discover_newsroom()
-            all_sources.extend(newsroom_sources)
-            self.stats["newsroom"] = len(newsroom_sources)
-            print(f"   ✓ Found {len(newsroom_sources)} items")
-        except Exception as e:
-            error_msg = f"Newsroom discovery failed: {e}"
-            print(f"   ✗ {error_msg}")
+            error_msg = f"LinkedIn failed: {e}"
+            print(f"   ℹ️  {error_msg} (non-critical)")
             self.stats["errors"].append(error_msg)
         
         # Deduplicate by URL
         all_sources = self._deduplicate_sources(all_sources)
         
         print(f"\n✅ Total sources discovered: {len(all_sources)}")
-        print(f"   Google News: {self.stats['google_news']}")
-        print(f"   LinkedIn: {self.stats['linkedin']}")
-        print(f"   Newsroom: {self.stats['newsroom']}")
+        print(f"   📊 IR Pages: {self.stats['investor_relations']}")
+        print(f"   📈 Earnings: {self.stats['earnings_reports']}")
+        print(f"   🏢 Newsroom: {self.stats['direct_newsroom']}")
+        print(f"   🌐 Bing: {self.stats['bing_news']}")
+        print(f"   💼 LinkedIn: {self.stats['linkedin']}")
         
         if self.stats["errors"]:
-            print(f"\n⚠️  Errors encountered: {len(self.stats['errors'])}")
-            for err in self.stats["errors"][:3]:  # Show first 3
-                print(f"   - {err}")
+            print(f"\n⚠️  Errors: {len(self.stats['errors'])}")
+            for err in self.stats["errors"][:2]:
+                print(f"   - {err[:80]}...")
         
         # Fetch full content for each source
         if not all_sources:
-            error_msg = "No sources discovered from any channel. "
+            error_msg = "❌ No sources discovered from ANY channel! "
             if self.stats["errors"]:
-                error_msg += f"Errors: {', '.join(self.stats['errors'][:3])}"
+                error_msg += f"\nErrors: {', '.join(self.stats['errors'][:2])}"
             raise Exception(error_msg)
         
         print(f"\n📥 Fetching content for {len(all_sources)} sources...")
@@ -213,7 +272,7 @@ class CompanyIntelligenceScraper:
         
         if not all_sources:
             raise Exception(
-                f"All {len(sources)} sources failed during content enrichment. "
+                f"❌ All sources failed during content enrichment. "
                 "Possible causes: Paywalls, Anti-scraping, Network issues."
             )
         
@@ -350,17 +409,212 @@ class CompanyIntelligenceScraper:
         return sources
     
     # ==========================================================================
-    # NEWSROOM DISCOVERY
+    # INVESTOR RELATIONS DISCOVERY (NEW - PRIORITY 1)
     # ==========================================================================
     
-    def _discover_newsroom(self) -> List[Dict]:
-        """Discover company newsroom (auto-detect or use provided URL)."""
+    def _discover_investor_relations(self) -> List[Dict]:
+        """
+        Discover Investor Relations pages (HIGHEST PRIORITY).
+        
+        IR pages typically contain:
+        - Financial reports
+        - Earnings releases
+        - Investor presentations
+        - Quarterly/Annual reports
+        """
+        sources = []
+        
+        # Auto-discover IR page
+        candidates = build_investor_relations_candidates(self.domain)
+        
+        for candidate_url in candidates[:10]:  # Check top 10 most likely
+            try:
+                response = requests.head(candidate_url, headers=HEADERS, timeout=5, allow_redirects=True)
+                
+                if response.status_code < 400:
+                    print(f"   ✓ Found IR page: {candidate_url}")
+                    items = self._scrape_ir_index(candidate_url)
+                    sources.extend(items)
+                    
+                    if items:
+                        return sources  # Found IR page with content, stop
+            except Exception:
+                continue
+        
+        return sources
+    
+    def _scrape_ir_index(self, url: str) -> List[Dict]:
+        """Scrape IR index page for reports and articles."""
+        try:
+            response = requests.get(url, headers=HEADERS, timeout=TIMEOUT, allow_redirects=True)
+            response.raise_for_status()
+            
+            soup = BeautifulSoup(response.text, "html.parser")
+            items = []
+            
+            # Find all links
+            for link in soup.find_all("a", href=True):
+                href = link.get("href", "").strip()
+                if not href:
+                    continue
+                
+                # Make absolute URL
+                if not href.startswith("http"):
+                    href = urljoin(url, href)
+                
+                if not is_valid_url(href):
+                    continue
+                
+                # Filter: Prioritize earnings/financial report URLs
+                url_lower = href.lower()
+                is_relevant = (
+                    'earnings' in url_lower or
+                    'quarterly' in url_lower or
+                    'annual' in url_lower or
+                    'financial' in url_lower or
+                    'report' in url_lower or
+                    'results' in url_lower or
+                    'investor' in url_lower
+                )
+                
+                if not is_relevant:
+                    continue  # Skip non-relevant links
+                
+                title = link.get_text(strip=True) or "IR Document"
+                
+                # Try to extract date
+                published_at = None
+                parent = link.find_parent()
+                if parent:
+                    text = parent.get_text()
+                    date_match = re.search(r'(\d{4}-\d{2}-\d{2}|\d{2}\.\d{2}\.\d{4}|Q[1-4]\s+\d{4})', text)
+                    if date_match:
+                        try:
+                            dt = dateparser.parse(date_match.group(1))
+                            if dt and dt.tzinfo is None:
+                                dt = dt.replace(tzinfo=timezone.utc)
+                            published_at = dt
+                        except Exception:
+                            pass
+                
+                items.append({
+                    "url": href,
+                    "title": title,
+                    "source": "investor_relations",
+                    "published_at": published_at.isoformat() if published_at else None,
+                    "priority": 1,  # Highest priority
+                    "is_pdf": is_pdf_url(href)
+                })
+                
+                if len(items) >= self.max_per_source:
+                    break
+            
+            return items
+        except Exception as e:
+            raise Exception(f"Failed to scrape IR page {url}: {e}")
+    
+    # ==========================================================================
+    # EARNINGS REPORTS DISCOVERY (NEW - PRIORITY 2)
+    # ==========================================================================
+    
+    def _discover_earnings_reports(self) -> List[Dict]:
+        """
+        Discover earnings reports (PDFs) - PRIORITY 2.
+        
+        Focuses on quarterly/annual financial reports.
+        """
+        sources = []
+        
+        # Auto-discover earnings pages
+        candidates = build_earnings_report_candidates(self.domain)
+        
+        for candidate_url in candidates[:8]:  # Check top 8
+            try:
+                response = requests.head(candidate_url, headers=HEADERS, timeout=5, allow_redirects=True)
+                
+                if response.status_code < 400:
+                    print(f"   ✓ Found earnings page: {candidate_url}")
+                    items = self._scrape_earnings_index(candidate_url)
+                    sources.extend(items)
+                    
+                    if items:
+                        return sources  # Found earnings page, stop
+            except Exception:
+                continue
+        
+        return sources
+    
+    def _scrape_earnings_index(self, url: str) -> List[Dict]:
+        """Scrape earnings report index page."""
+        try:
+            response = requests.get(url, headers=HEADERS, timeout=TIMEOUT, allow_redirects=True)
+            response.raise_for_status()
+            
+            soup = BeautifulSoup(response.text, "html.parser")
+            items = []
+            
+            for link in soup.find_all("a", href=True):
+                href = link.get("href", "").strip()
+                if not href:
+                    continue
+                
+                # Make absolute URL
+                if not href.startswith("http"):
+                    href = urljoin(url, href)
+                
+                if not is_valid_url(href):
+                    continue
+                
+                # Prioritize PDFs and earnings-related links
+                url_lower = href.lower()
+                is_earnings = (
+                    is_pdf_url(href) or
+                    'earnings' in url_lower or
+                    'quarterly' in url_lower or
+                    'q1' in url_lower or 'q2' in url_lower or 'q3' in url_lower or 'q4' in url_lower or
+                    'fy20' in url_lower or 'fy21' in url_lower or 'fy22' in url_lower or 
+                    'fy23' in url_lower or 'fy24' in url_lower or 'fy25' in url_lower or 'fy26' in url_lower
+                )
+                
+                if not is_earnings:
+                    continue
+                
+                title = link.get_text(strip=True) or "Earnings Report"
+                
+                items.append({
+                    "url": href,
+                    "title": title,
+                    "source": "earnings_report",
+                    "published_at": None,
+                    "priority": 2,
+                    "is_pdf": is_pdf_url(href)
+                })
+                
+                if len(items) >= self.max_per_source:
+                    break
+            
+            return items
+        except Exception as e:
+            raise Exception(f"Failed to scrape earnings page {url}: {e}")
+    
+    # ==========================================================================
+    # DIRECT NEWSROOM DISCOVERY (UPDATED - PRIORITY 3)
+    # ==========================================================================
+    
+    def _discover_direct_newsroom(self) -> List[Dict]:
+        """
+        Discover company newsroom DIRECTLY (no Google News proxy).
+        
+        Tries:
+        1. RSS/Atom feeds from newsroom
+        2. Direct scraping of newsroom index
+        """
         sources = []
         
         # If newsroom URL provided, use it
         if self.newsroom_url:
             try:
-                items = self._scrape_newsroom_index(self.newsroom_url)
+                items = self._scrape_newsroom_rss_or_index(self.newsroom_url)
                 sources.extend(items)
                 return sources
             except Exception as e:
@@ -369,22 +623,107 @@ class CompanyIntelligenceScraper:
         # Auto-discover newsroom
         candidates = build_newsroom_candidates(self.domain)
         
-        for candidate_url in candidates:
+        for candidate_url in candidates[:6]:  # Check top 6
             try:
-                # Quick check if URL exists
                 response = requests.head(candidate_url, headers=HEADERS, timeout=5, allow_redirects=True)
                 
                 if response.status_code < 400:
                     print(f"   ✓ Found newsroom: {candidate_url}")
-                    items = self._scrape_newsroom_index(candidate_url)
+                    items = self._scrape_newsroom_rss_or_index(candidate_url)
                     sources.extend(items)
-                    return sources  # Found one, stop searching
+                    
+                    if items:
+                        return sources  # Found newsroom, stop
             except Exception:
-                continue  # Try next candidate
+                continue
         
-        # No newsroom found
-        print(f"   ℹ️  No newsroom found for {self.domain}")
-        return []
+        return sources
+    
+    def _scrape_newsroom_rss_or_index(self, url: str) -> List[Dict]:
+        """Try RSS first, fall back to HTML scraping."""
+        # Try to find RSS/Atom feed
+        rss_candidates = [
+            f"{url}/rss",
+            f"{url}/feed",
+            f"{url}/rss.xml",
+            f"{url}/feed.xml",
+            f"{url}/atom.xml",
+        ]
+        
+        for rss_url in rss_candidates:
+            try:
+                feed = feedparser.parse(rss_url)
+                if feed.entries:
+                    print(f"      ✓ Found RSS feed: {rss_url}")
+                    return self._parse_newsroom_rss(feed)
+            except Exception:
+                continue
+        
+        # Fallback: HTML scraping
+        return self._scrape_newsroom_index(url)
+    
+    def _parse_newsroom_rss(self, feed) -> List[Dict]:
+        """Parse newsroom RSS feed."""
+        items = []
+        
+        for entry in feed.entries[:self.max_per_source]:
+            link = entry.get("link", "")
+            if not link:
+                continue
+            
+            title = entry.get("title", "").strip() or "News"
+            
+            # Parse date
+            published_at = None
+            for date_field in ("published", "updated"):
+                if date_field in entry:
+                    try:
+                        dt = dateparser.parse(entry[date_field])
+                        if dt and dt.tzinfo is None:
+                            dt = dt.replace(tzinfo=timezone.utc)
+                        published_at = dt
+                        break
+                    except Exception:
+                        continue
+            
+            items.append({
+                "url": link,
+                "title": title,
+                "source": "newsroom_rss",
+                "published_at": published_at.isoformat() if published_at else None,
+                "priority": 3
+            })
+        
+        return items
+    
+    # ==========================================================================
+    # BING NEWS DISCOVERY (NEW - PRIORITY 4 - FALLBACK)
+    # ==========================================================================
+    
+    def _discover_bing_news(self) -> List[Dict]:
+        """
+        Discover via Bing News RSS (FALLBACK ONLY).
+        
+        Better than Google News because:
+        - Direct URLs (no proxy/redirect)
+        - Better filtering
+        - Scrapeable
+        """
+        sources = []
+        
+        # Bing News RSS doesn't exist publicly like Google News
+        # Instead, we'll use Bing's regular RSS which gives better URLs
+        # For now, return empty (can implement if needed)
+        
+        return sources
+    
+    # ==========================================================================
+    # NEWSROOM DISCOVERY (OLD METHOD - KEPT FOR COMPATIBILITY)
+    # ==========================================================================
+    
+    def _discover_newsroom(self) -> List[Dict]:
+        """OLD METHOD - Use _discover_direct_newsroom() instead."""
+        return self._discover_direct_newsroom()
     
     def _scrape_newsroom_index(self, url: str) -> List[Dict]:
         """Scrape newsroom index page for article links."""
@@ -455,6 +794,8 @@ class CompanyIntelligenceScraper:
         """
         Enrich sources with full text content.
         
+        UPDATED: Now handles PDFs as well as HTML pages.
+        
         Args:
             sources: List of source dicts
         
@@ -467,6 +808,8 @@ class CompanyIntelligenceScraper:
                 - fetch_timestamp: ISO timestamp
                 - http_status_code: int (if succeeded)
                 - enrich_error: str (if failed)
+                - is_pdf: bool
+                - is_earnings_report: bool (if PDF)
         """
         enriched = []
         success_count = 0
@@ -475,56 +818,71 @@ class CompanyIntelligenceScraper:
         
         for i, source in enumerate(sources, 1):
             url = source["url"]
+            is_pdf = source.get("is_pdf", False) or is_pdf_url(url)
             
             try:
-                # Fetch full page (follow redirects for Google News URLs)
-                response = requests.get(
-                    url, 
-                    headers=HEADERS, 
-                    timeout=TIMEOUT,
-                    allow_redirects=True  # CRITICAL: Follow Google News redirects!
-                )
-                response.raise_for_status()
-                html = response.text
+                # CASE 1: PDF Document
+                if is_pdf:
+                    print(f"   📄 Processing PDF: {url[:60]}...")
+                    text = extract_text_from_pdf_url(url, timeout=TIMEOUT)
+                    
+                    if text and len(text) >= 50:
+                        source["raw_text"] = text
+                        source["text_hash"] = hash_text(text)
+                        source["is_pdf"] = True
+                        source["is_earnings_report"] = is_earnings_report_pdf(text)
+                        source["has_ecommerce_keywords"] = self._has_ecommerce_keywords(text)
+                        success_count += 1
+                    else:
+                        source["raw_text"] = text or ""
+                        source["enrich_error"] = "PDF parsing failed or text too short"
+                        source["is_pdf"] = True
                 
-                # Store final URL after redirects
-                final_url = response.url
-                if final_url != url:
-                    source["final_url"] = final_url
-                
-                # Extract main content
-                text = self._extract_article_text(html)
-                
-                # CHANGED: Lower threshold from 200 to 50, and keep source even if short
-                if len(text) >= 50:
-                    source["raw_text"] = text
-                    source["text_hash"] = hash_text(text)
-                    source["has_ecommerce_keywords"] = self._has_ecommerce_keywords(text)
-                    success_count += 1
+                # CASE 2: HTML Page
                 else:
-                    # Keep source but mark as short
-                    source["raw_text"] = text
-                    source["enrich_error"] = f"Text too short ({len(text)} chars)"
+                    response = requests.get(
+                        url, 
+                        headers=HEADERS, 
+                        timeout=TIMEOUT,
+                        allow_redirects=True
+                    )
+                    response.raise_for_status()
+                    
+                    # Store final URL after redirects
+                    final_url = response.url
+                    if final_url != url:
+                        source["final_url"] = final_url
+                    
+                    # Extract main content
+                    text = self._extract_article_text(response.text)
+                    
+                    if len(text) >= 50:
+                        source["raw_text"] = text
+                        source["text_hash"] = hash_text(text)
+                        source["has_ecommerce_keywords"] = self._has_ecommerce_keywords(text)
+                        success_count += 1
+                    else:
+                        source["raw_text"] = text
+                        source["enrich_error"] = f"Text too short ({len(text)} chars)"
+                    
+                    source["http_status_code"] = response.status_code
                 
                 source["is_eu_source"] = is_eu_url(url)
                 source["fetch_timestamp"] = datetime.now(timezone.utc).isoformat()
-                source["http_status_code"] = response.status_code
-                
-                enriched.append(source)  # CHANGED: Always append, even if text is short
+                enriched.append(source)
                 
                 if i % 10 == 0:
                     print(f"   {i}/{len(sources)} processed...")
                 
-                # Rate limiting (be nice)
-                time.sleep(0.3)  # Reduced from 0.5 to 0.3
+                # Rate limiting
+                time.sleep(0.3)
                 
             except Exception as e:
-                # CHANGED: Keep source but mark error
                 source["raw_text"] = ""
                 source["enrich_error"] = str(e)[:200]
                 source["fetch_timestamp"] = datetime.now(timezone.utc).isoformat()
                 enriched.append(source)
-                print(f"   ✗ Error {url}: {str(e)[:50]}")
+                print(f"   ✗ Error {url[:60]}: {str(e)[:50]}")
         
         print(f"✅ Enriched {success_count}/{len(sources)} sources successfully")
         print(f"   Kept {len(enriched)} total sources (including failures)")
