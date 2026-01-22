@@ -11,13 +11,10 @@ Coordinates:
 This is the main entry point for running a company analysis.
 """
 
-import sys
-import os
 from typing import Optional, Callable
 from datetime import datetime
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
+# Import from project modules
 from core.scraper import CompanyIntelligenceScraper
 from extractor import SignalExtractor
 from validators.citation_validator import CitationValidator

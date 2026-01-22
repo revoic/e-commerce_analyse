@@ -4,12 +4,14 @@ Cross-Reference Validator - Layer 5 of Anti-Hallucination System
 Validates that facts appear in multiple sources (corroboration).
 """
 
-import sys
-import os
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from utils.text_utils import normalize_text
+try:
+    from utils.text_utils import normalize_text
+except ImportError:
+    # Fallback for direct execution
+    import sys
+    import os
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from utils.text_utils import normalize_text
 
 
 class CrossReferenceValidator:

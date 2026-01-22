@@ -8,13 +8,15 @@ This is the MOST IMPORTANT layer for preventing hallucinations.
 import re
 from difflib import SequenceMatcher
 from typing import Tuple, Optional
-import sys
-import os
 
-# Add parent directory to path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from utils.text_utils import normalize_text, extract_numbers
+try:
+    from utils.text_utils import normalize_text, extract_numbers
+except ImportError:
+    # Fallback for direct execution
+    import sys
+    import os
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from utils.text_utils import normalize_text, extract_numbers
 
 
 class CitationValidator:

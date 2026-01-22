@@ -5,11 +5,8 @@ Second LLM pass to verify extracted facts.
 Uses a different prompt strategy focused on verification and falsification.
 """
 
-import sys
 import os
 from typing import Optional
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 try:
     from openai import OpenAI
