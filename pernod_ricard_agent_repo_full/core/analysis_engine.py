@@ -11,8 +11,15 @@ Coordinates:
 This is the main entry point for running a company analysis.
 """
 
+import sys
+import os
 from typing import Optional, Callable
 from datetime import datetime
+
+# Add parent directory to path so we can import from project root
+_parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _parent_dir not in sys.path:
+    sys.path.insert(0, _parent_dir)
 
 # Import from project modules
 from core.scraper import CompanyIntelligenceScraper
