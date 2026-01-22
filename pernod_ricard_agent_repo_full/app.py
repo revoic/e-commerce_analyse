@@ -313,7 +313,7 @@ if 'last_result' in st.session_state:
         
         if not sources:
             st.info("No sources found.")
-else:
+        else:
             st.subheader(f"Analyzed {len(sources)} Sources")
             
             # Create DataFrame
