@@ -100,6 +100,7 @@ class AnalysisEngine:
             self._progress(f"✓ Found {len(self.sources)} sources", 0.30)
             
             if not self.sources:
+                self.report = self._generate_empty_report("No sources found")
                 return self._build_result("No sources found")
             
             # Step 2: Extract signals (30-50%)
@@ -111,7 +112,14 @@ class AnalysisEngine:
             self._progress(f"✓ Extracted {len(self.raw_signals)} raw signals", 0.50)
             
             if not self.raw_signals:
-                return self._build_result("No signals extracted")
+                # Generate report with stats even if no signals extracted
+                self.citation_validator = CitationValidator(self.sources)
+                self.cross_validator = CrossReferenceValidator()
+                self.fact_checker = LLMFactChecker()
+                self.confidence_filter = ConfidenceFilter()
+                filter_results = {'high_confidence': [], 'medium_confidence': [], 'low_confidence': [], 'stats': {}}
+                self.report = self._generate_report(filter_results)
+                return self._build_result("No signals extracted from sources")
             
             # Step 3: Citation validation (50-60%)
             self._progress("📝 Validating citations...", 0.50)
@@ -179,6 +187,28 @@ class AnalysisEngine:
             if self.stats['start_time']:
                 delta = self.stats['end_time'] - self.stats['start_time']
                 self.stats['duration_seconds'] = delta.total_seconds()
+    
+    def _generate_empty_report(self, reason: str) -> dict:
+        """Generate minimal report when analysis fails early."""
+        return {
+            'company': self.company_name,
+            'generated_at': datetime.now().isoformat(),
+            'summary': {
+                'total_sources': len(self.sources),
+                'high_confidence_signals': 0,
+                'medium_confidence_signals': 0,
+                'metrics_covered': 0,
+                'regions': {},
+                'error': reason
+            },
+            'signals_by_metric': {},
+            'all_high_confidence_signals': [],
+            'validation_stats': {
+                'scraper': self.scraper.get_discovery_stats() if hasattr(self, 'scraper') else {},
+                'extractor': self.extractor.get_stats() if hasattr(self, 'extractor') else {},
+                'error': reason
+            }
+        }
     
     def _generate_report(self, filter_results: dict) -> dict:
         """
