@@ -63,7 +63,7 @@ class SignalExtractor:
             api_key = st.secrets.get('OPENAI_API_KEY')
         
         if not api_key:
-    raise RuntimeError(
+            raise RuntimeError(
                 "OPENAI_API_KEY not set. Set in .env or Streamlit secrets."
             )
         
