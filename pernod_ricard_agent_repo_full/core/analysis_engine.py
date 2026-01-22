@@ -255,7 +255,7 @@ class AnalysisEngine:
             'signals_by_metric': metrics_map,
             'all_high_confidence_signals': high_conf,
             'validation_stats': {
-                'scraper': self.scraper.get_discovery_stats(),
+                'scraper': self.scraper.get_stats(),
                 'extractor': self.extractor.get_stats(),
                 'citation_validator': self.citation_validator.get_stats() if hasattr(self, 'citation_validator') else {},
                 'cross_reference': self.cross_validator.get_stats() if hasattr(self, 'cross_validator') else {},
