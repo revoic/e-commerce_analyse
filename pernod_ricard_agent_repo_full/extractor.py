@@ -189,7 +189,8 @@ class SignalExtractor:
             title = source.get('title', '')
             url = source.get('url', '')
             
-            if not text or len(text) < 100:
+            # Match scraper's threshold (was 100, now 50)
+            if not text or len(text) < 50:
                 continue
             
             # Extract signals
