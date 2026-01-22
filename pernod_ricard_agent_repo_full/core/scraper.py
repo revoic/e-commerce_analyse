@@ -201,9 +201,21 @@ class CompanyIntelligenceScraper:
                 print(f"   - {err}")
         
         # Fetch full content for each source
+        if not all_sources:
+            error_msg = "No sources discovered from any channel. "
+            if self.stats["errors"]:
+                error_msg += f"Errors: {', '.join(self.stats['errors'][:3])}"
+            raise Exception(error_msg)
+        
         print(f"\n📥 Fetching content for {len(all_sources)} sources...")
         all_sources = self.enrich_sources(all_sources)
         print(f"✅ Successfully enriched {len(all_sources)} sources with content")
+        
+        if not all_sources:
+            raise Exception(
+                f"All {len(sources)} sources failed during content enrichment. "
+                "Possible causes: Paywalls, Anti-scraping, Network issues."
+            )
         
         return all_sources
     
@@ -448,14 +460,16 @@ class CompanyIntelligenceScraper:
         
         Returns:
             List of enriched source dicts with additional keys:
-                - raw_text: Full article text
-                - text_hash: SHA256 hash
+                - raw_text: Full article text (or empty if failed)
+                - text_hash: SHA256 hash (if text available)
                 - is_eu_source: bool
-                - has_ecommerce_keywords: bool
+                - has_ecommerce_keywords: bool (if text available)
                 - fetch_timestamp: ISO timestamp
-                - http_status_code: int
+                - http_status_code: int (if succeeded)
+                - enrich_error: str (if failed)
         """
         enriched = []
+        success_count = 0
         
         print(f"\n📄 Enriching {len(sources)} sources...")
         
@@ -471,39 +485,47 @@ class CompanyIntelligenceScraper:
                 # Extract main content
                 text = self._extract_article_text(html)
                 
-                # Skip if too short
-                if len(text) < 200:
-                    continue
+                # CHANGED: Lower threshold from 200 to 50, and keep source even if short
+                if len(text) >= 50:
+                    source["raw_text"] = text
+                    source["text_hash"] = hash_text(text)
+                    source["has_ecommerce_keywords"] = self._has_ecommerce_keywords(text)
+                    success_count += 1
+                else:
+                    # Keep source but mark as short
+                    source["raw_text"] = text
+                    source["enrich_error"] = f"Text too short ({len(text)} chars)"
                 
-                # Enrich
-                source["raw_text"] = text
-                source["text_hash"] = hash_text(text)
                 source["is_eu_source"] = is_eu_url(url)
-                source["has_ecommerce_keywords"] = self._has_ecommerce_keywords(text)
                 source["fetch_timestamp"] = datetime.now(timezone.utc).isoformat()
                 source["http_status_code"] = response.status_code
                 
-                enriched.append(source)
+                enriched.append(source)  # CHANGED: Always append, even if text is short
                 
                 if i % 10 == 0:
-                    print(f"   {i}/{len(sources)} enriched...")
+                    print(f"   {i}/{len(sources)} processed...")
                 
                 # Rate limiting (be nice)
-                time.sleep(0.5)
+                time.sleep(0.3)  # Reduced from 0.5 to 0.3
                 
             except Exception as e:
-                print(f"   ✗ Failed to enrich {url}: {e}")
-                continue
+                # CHANGED: Keep source but mark error
+                source["raw_text"] = ""
+                source["enrich_error"] = str(e)[:200]
+                source["fetch_timestamp"] = datetime.now(timezone.utc).isoformat()
+                enriched.append(source)
+                print(f"   ✗ Error {url}: {str(e)[:50]}")
         
-        print(f"✅ Enriched {len(enriched)}/{len(sources)} sources")
+        print(f"✅ Enriched {success_count}/{len(sources)} sources successfully")
+        print(f"   Kept {len(enriched)} total sources (including failures)")
         
         return enriched
     
     def _extract_article_text(self, html: str) -> str:
         """Extract main article text from HTML."""
         try:
-            # Try readability first
-            from readability import Document
+            # Try readability first (FIXED import!)
+            from readability.readability import Document
             doc = Document(html)
             article_html = doc.summary(html_partial=True)
             
