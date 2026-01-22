@@ -477,10 +477,20 @@ class CompanyIntelligenceScraper:
             url = source["url"]
             
             try:
-                # Fetch full page
-                response = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
+                # Fetch full page (follow redirects for Google News URLs)
+                response = requests.get(
+                    url, 
+                    headers=HEADERS, 
+                    timeout=TIMEOUT,
+                    allow_redirects=True  # CRITICAL: Follow Google News redirects!
+                )
                 response.raise_for_status()
                 html = response.text
+                
+                # Store final URL after redirects
+                final_url = response.url
+                if final_url != url:
+                    source["final_url"] = final_url
                 
                 # Extract main content
                 text = self._extract_article_text(html)
