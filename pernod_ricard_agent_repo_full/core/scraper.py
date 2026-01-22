@@ -200,6 +200,11 @@ class CompanyIntelligenceScraper:
             for err in self.stats["errors"][:3]:  # Show first 3
                 print(f"   - {err}")
         
+        # Fetch full content for each source
+        print(f"\n📥 Fetching content for {len(all_sources)} sources...")
+        all_sources = self._enrich_with_content(all_sources)
+        print(f"✅ Successfully enriched {len(all_sources)} sources with content")
+        
         return all_sources
     
     # ==========================================================================
