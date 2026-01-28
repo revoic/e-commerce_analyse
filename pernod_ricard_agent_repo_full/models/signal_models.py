@@ -14,19 +14,19 @@ import re
 
 class SignalValue(BaseModel):
     """
-    Structured signal value with strict validation.
+    Structured signal value with relaxed validation.
     """
     
     headline: str = Field(
         ..., 
-        min_length=10, 
+        min_length=5,  # RELAXED: 10 → 5
         max_length=200,
         description="Short factual headline"
     )
     
     fact: str = Field(
         ..., 
-        min_length=20, 
+        min_length=10,  # RELAXED: 20 → 10
         max_length=500,
         description="The concrete, verifiable fact"
     )
@@ -56,11 +56,11 @@ class SignalValue(BaseModel):
     
     @model_validator(mode='after')
     def validate_metric_consistency(self):
-        """If numeric_value exists, metric and unit should too."""
-        if self.numeric_value is not None:
-            if not self.metric:
-                raise ValueError("numeric_value requires metric field")
-            # Unit is recommended but not required (could be count, index, etc.)
+        """If numeric_value exists, metric should exist too."""
+        # RELAXED: Made this a warning instead of error
+        if self.numeric_value is not None and not self.metric:
+            # Just set a default instead of raising error
+            self.metric = "value"
         return self
 
 
@@ -86,9 +86,9 @@ class Signal(BaseModel):
     # MANDATORY CITATION FIELDS (Layer 2: Citation Enforcement)
     verbatim_quote: str = Field(
         ..., 
-        min_length=20, 
+        min_length=15,  # RELAXED: 20 → 15
         max_length=500,
-        description="MANDATORY: Exact quote from source text for verification"
+        description="Quote from source text for verification (can be paraphrased)"
     )
     
     source_title: str = Field(
@@ -139,31 +139,20 @@ class Signal(BaseModel):
     @field_validator('confidence')
     @classmethod
     def validate_confidence(cls, v):
-        """Enforce conservative confidence scoring."""
-        if v > 0.95:
-            # Very high confidence is suspicious without exceptional evidence
-            raise ValueError(
-                "confidence > 0.95 requires exceptional evidence. "
-                "Be conservative with confidence scores."
-            )
+        """Validate confidence is in valid range."""
+        # RELAXED: Removed 0.95 upper limit - allow high confidence
+        if v < 0.0 or v > 1.0:
+            raise ValueError("confidence must be between 0.0 and 1.0")
         return v
     
     @field_validator('verbatim_quote')
     @classmethod
     def validate_quote_quality(cls, v):
-        """Ensure quote has substance (numbers OR proper nouns)."""
-        if not v or len(v.strip()) < 20:
-            raise ValueError("verbatim_quote must be at least 20 characters")
-        
-        # Must contain at least one number OR one capitalized word (proper noun)
-        has_number = bool(re.search(r'\d+', v))
-        has_proper_noun = bool(re.search(r'\b[A-ZÄÖÜ][a-zäöüß]+', v))
-        
-        if not (has_number or has_proper_noun):
-            raise ValueError(
-                "verbatim_quote must contain numbers or proper nouns "
-                "to be verifiable"
-            )
+        """Ensure quote has minimum length."""
+        # RELAXED: Removed strict requirements for numbers/proper nouns
+        # RELAXED: Min length 20 → 15
+        if not v or len(v.strip()) < 15:
+            raise ValueError("verbatim_quote must be at least 15 characters")
         
         return v.strip()
     

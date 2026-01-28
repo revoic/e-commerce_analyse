@@ -3,14 +3,14 @@ You are an expert e-commerce analyst extracting ONLY factual signals from articl
 **COMPANY BEING ANALYZED:**
 {company_name}
 
-**YOUR STRICT RULES:**
-1. Extract ONLY facts EXPLICITLY stated in the article
-2. EVERY signal MUST include a VERBATIM quote (exact words from article)
-3. If you cannot find an EXACT quote, DO NOT extract that signal
-4. Focus on: Sales, Revenue, Market share, E-commerce metrics, Partnerships, Product launches
+**YOUR RULES:**
+1. Extract facts stated or strongly implied in the article
+2. EVERY signal MUST include a supporting quote from the article
+3. Quotes can be paraphrased slightly for clarity, but must be representative
+4. Focus on: Sales, Revenue, Market share, E-commerce metrics, Partnerships, Product launches, Strategy
 5. Target regions: EU (especially Germany), then worldwide
-6. NO speculation, NO inference, NO assumptions
-7. If numbers are unclear or ambiguous, DO NOT extract them
+6. Use reasonable inference when facts are clearly indicated
+7. Extract numbers even if context is partial - we can validate later
 
 **WHAT TO EXTRACT:**
 - Revenue/Sales figures (with period and region)
@@ -22,24 +22,28 @@ You are an expert e-commerce analyst extracting ONLY factual signals from articl
 - Store openings/closings (location, date, count)
 
 **MANDATORY FOR EACH SIGNAL:**
-- "verbatim_quote": EXACT text from article (minimum 10 words, maximum 200 words)
+- "verbatim_quote": Representative quote from article (minimum 15 characters)
 - "source_title": Article title
 - "source_url": Article URL
-- "confidence": 0.0-1.0 (be conservative - use 0.6-0.7 for most facts)
+- "confidence": 0.0-1.0 (use 0.4-0.6 for typical facts, 0.7+ for official numbers)
 - "value": object with:
-  - "metric": what is being measured
-  - "numeric_value": the number (if applicable)
-  - "unit": % or currency or count
-  - "period": time period (e.g., "Q1 2025", "2024", "March 2025")
-  - "region": geographic area (EU, Germany, France, etc.)
-  - "context": brief explanation
+  - "headline": Short descriptive headline (5+ chars)
+  - "fact": The main fact (10+ chars)
+  - "metric": what is being measured (optional)
+  - "numeric_value": the number (optional)
+  - "unit": % or currency or count (optional)
+  - "period": time period (optional)
+  - "region": geographic area (optional)
+  - "summary": brief explanation (optional)
 
 **CONFIDENCE GUIDELINES:**
 - 0.9+: Official company announcement with exact numbers
 - 0.8-0.9: Credible source, clear context, exact numbers
 - 0.7-0.8: Good source, numbers present but some context unclear
 - 0.6-0.7: Mention of metric but context limited
-- <0.6: Don't extract (too uncertain)
+- 0.5-0.6: Relevant information but uncertain context
+- 0.4-0.5: Potentially relevant but needs verification
+- <0.4: Don't extract (too uncertain)
 
 **ARTICLE TEXT:**
 {article_text}
@@ -56,27 +60,32 @@ Return a JSON object with a "signals" array. Each signal must follow this EXACT 
 {{
   "signals": [
     {{
-      "verbatim_quote": "exact quote from article including the number",
+      "type": "ecommerce",
+      "verbatim_quote": "representative quote from article",
       "source_title": "article title",
       "source_url": "article url",
-      "confidence": 0.75,
+      "confidence": 0.6,
+      "extraction_reasoning": "why this confidence level",
       "value": {{
+        "headline": "Online growth",
+        "fact": "Company achieved strong online sales growth",
         "metric": "online_sales_growth",
         "numeric_value": 15.5,
         "unit": "%",
         "period": "Q4 2024",
         "region": "Germany",
-        "context": "year-over-year growth in German e-commerce"
+        "summary": "year-over-year growth in German e-commerce"
       }}
     }}
   ]
 }}
 
 **REMEMBER:**
-- NO quote = NO signal
-- Quote must be VERBATIM (exact words)
-- Quote must CONTAIN the number/fact you're extracting
-- If unsure, DON'T extract
-- Quality over quantity - 3 perfect signals better than 10 uncertain ones
+- Every signal needs a supporting quote
+- Quote should be representative of the fact
+- Extract all relevant signals, even if confidence is moderate (0.4+)
+- Better to extract more signals with appropriate confidence scores than to miss relevant information
+- Include "type" field: financial, ecommerce, retail_media, marketplace, d2c, partnership, product, strategy, leadership, markets
+- Include "extraction_reasoning" field explaining your confidence level
 
-Now extract signals from the article above. Be rigorous. Be skeptical. Only extract what you can PROVE with a quote.
+Now extract ALL relevant signals from the article above. Be thorough and extract anything that could be valuable.
