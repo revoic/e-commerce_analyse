@@ -43,6 +43,7 @@ from utils.pdf_utils import (
     is_earnings_report_pdf,
     extract_key_metrics_from_text
 )
+from utils.search_api import GoogleSearchClient
 
 
 # ==============================================================================
@@ -133,6 +134,9 @@ class CompanyIntelligenceScraper:
         self.lookback_hours = self.lookback_days * 24
         self.cutoff_date = datetime.now(timezone.utc) - timedelta(days=self.lookback_days)
         
+        # Initialize Google Search API client
+        self.search_client = GoogleSearchClient()
+        
         # Statistics
         self.stats = {
             "investor_relations": 0,
@@ -141,7 +145,8 @@ class CompanyIntelligenceScraper:
             "bing_news": 0,
             "linkedin": 0,
             "google_news": 0,
-            "errors": []
+            "errors": [],
+            "search_api_enabled": self.search_client.enabled
         }
     
     # ==========================================================================
@@ -416,6 +421,10 @@ class CompanyIntelligenceScraper:
         """
         Discover Investor Relations pages (HIGHEST PRIORITY).
         
+        STRATEGY:
+        1. Use Google Search API to find IR page (if enabled)
+        2. Fallback to URL guessing (if Search API disabled/fails)
+        
         IR pages typically contain:
         - Financial reports
         - Earnings releases
@@ -424,22 +433,60 @@ class CompanyIntelligenceScraper:
         """
         sources = []
         
-        # Auto-discover IR page
-        candidates = build_investor_relations_candidates(self.domain)
-        
-        for candidate_url in candidates[:10]:  # Check top 10 most likely
+        # ==================================================
+        # STRATEGY 1: Google Search API (BEST!)
+        # ==================================================
+        if self.search_client.enabled:
+            print(f"   🔍 Using Google Search API to find IR page...")
             try:
-                response = requests.head(candidate_url, headers=HEADERS, timeout=5, allow_redirects=True)
+                search_results = self.search_client.search_investor_relations(
+                    company=self.company_name,
+                    domain_hint=self.domain
+                )
                 
-                if response.status_code < 400:
-                    print(f"   ✓ Found IR page: {candidate_url}")
-                    items = self._scrape_ir_index(candidate_url)
-                    sources.extend(items)
+                if search_results:
+                    print(f"   ✓ Google Search found {len(search_results)} IR candidates")
                     
-                    if items:
-                        return sources  # Found IR page with content, stop
-            except Exception:
-                continue
+                    # Try each search result
+                    for result in search_results[:5]:  # Top 5 results
+                        url = result['link']
+                        try:
+                            print(f"      Testing: {url[:60]}...")
+                            items = self._scrape_ir_index(url)
+                            sources.extend(items)
+                            
+                            if items:
+                                print(f"      ✓ SUCCESS! Found {len(items)} IR items")
+                                return sources  # Found IR page with content, stop
+                        except Exception as e:
+                            print(f"      ✗ Failed: {str(e)[:50]}")
+                            continue
+                else:
+                    print(f"   ⚠️  Google Search found no IR pages")
+            except Exception as e:
+                print(f"   ⚠️  Google Search failed: {str(e)[:80]}")
+                self.stats["errors"].append(f"Search API IR failed: {e}")
+        
+        # ==================================================
+        # STRATEGY 2: URL Guessing (FALLBACK)
+        # ==================================================
+        if not sources:
+            print(f"   📍 Falling back to URL guessing...")
+            candidates = build_investor_relations_candidates(self.domain)
+            
+            for candidate_url in candidates[:10]:  # Check top 10 most likely
+                try:
+                    response = requests.head(candidate_url, headers=HEADERS, timeout=5, allow_redirects=True)
+                    
+                    if response.status_code < 400:
+                        print(f"      ✓ Found IR page: {candidate_url}")
+                        items = self._scrape_ir_index(candidate_url)
+                        sources.extend(items)
+                        
+                        if items:
+                            return sources  # Found IR page with content, stop
+                except Exception:
+                    continue
         
         return sources
     
@@ -521,26 +568,84 @@ class CompanyIntelligenceScraper:
         """
         Discover earnings reports (PDFs) - PRIORITY 2.
         
+        STRATEGY:
+        1. Use Google Search API to find earnings reports (if enabled)
+        2. Fallback to URL guessing (if Search API disabled/fails)
+        
         Focuses on quarterly/annual financial reports.
         """
         sources = []
         
-        # Auto-discover earnings pages
-        candidates = build_earnings_report_candidates(self.domain)
-        
-        for candidate_url in candidates[:8]:  # Check top 8
+        # ==================================================
+        # STRATEGY 1: Google Search API (BEST!)
+        # ==================================================
+        if self.search_client.enabled:
+            print(f"   🔍 Using Google Search API to find earnings reports...")
             try:
-                response = requests.head(candidate_url, headers=HEADERS, timeout=5, allow_redirects=True)
+                search_results = self.search_client.search_earnings_reports(
+                    company=self.company_name,
+                    year=datetime.now().year
+                )
                 
-                if response.status_code < 400:
-                    print(f"   ✓ Found earnings page: {candidate_url}")
-                    items = self._scrape_earnings_index(candidate_url)
-                    sources.extend(items)
+                if search_results:
+                    print(f"   ✓ Google Search found {len(search_results)} earnings candidates")
                     
-                    if items:
-                        return sources  # Found earnings page, stop
-            except Exception:
-                continue
+                    # Try each search result
+                    for result in search_results[:5]:  # Top 5 results
+                        url = result['link']
+                        
+                        # If it's a direct PDF link, add it directly
+                        if is_pdf_url(url):
+                            print(f"      ✓ Direct PDF: {url[:60]}...")
+                            sources.append({
+                                "url": url,
+                                "title": result['title'],
+                                "source": "earnings_report",
+                                "published_at": None,
+                                "priority": 2,
+                                "is_pdf": True
+                            })
+                            if len(sources) >= self.max_per_source:
+                                return sources
+                        else:
+                            # If it's an index page, scrape it
+                            try:
+                                print(f"      Testing: {url[:60]}...")
+                                items = self._scrape_earnings_index(url)
+                                sources.extend(items)
+                                
+                                if items:
+                                    print(f"      ✓ SUCCESS! Found {len(items)} earnings items")
+                                    return sources
+                            except Exception as e:
+                                print(f"      ✗ Failed: {str(e)[:50]}")
+                                continue
+                else:
+                    print(f"   ⚠️  Google Search found no earnings reports")
+            except Exception as e:
+                print(f"   ⚠️  Google Search failed: {str(e)[:80]}")
+                self.stats["errors"].append(f"Search API Earnings failed: {e}")
+        
+        # ==================================================
+        # STRATEGY 2: URL Guessing (FALLBACK)
+        # ==================================================
+        if not sources:
+            print(f"   📍 Falling back to URL guessing...")
+            candidates = build_earnings_report_candidates(self.domain)
+            
+            for candidate_url in candidates[:8]:  # Check top 8
+                try:
+                    response = requests.head(candidate_url, headers=HEADERS, timeout=5, allow_redirects=True)
+                    
+                    if response.status_code < 400:
+                        print(f"      ✓ Found earnings page: {candidate_url}")
+                        items = self._scrape_earnings_index(candidate_url)
+                        sources.extend(items)
+                        
+                        if items:
+                            return sources  # Found earnings page, stop
+                except Exception:
+                    continue
         
         return sources
     
@@ -605,13 +710,20 @@ class CompanyIntelligenceScraper:
         """
         Discover company newsroom DIRECTLY (no Google News proxy).
         
+        STRATEGY:
+        1. Use provided newsroom_url if available
+        2. Use Google Search API to find newsroom (if enabled)
+        3. Fallback to URL guessing
+        
         Tries:
-        1. RSS/Atom feeds from newsroom
-        2. Direct scraping of newsroom index
+        - RSS/Atom feeds from newsroom
+        - Direct scraping of newsroom index
         """
         sources = []
         
-        # If newsroom URL provided, use it
+        # ==================================================
+        # STRATEGY 1: Use provided URL
+        # ==================================================
         if self.newsroom_url:
             try:
                 items = self._scrape_newsroom_rss_or_index(self.newsroom_url)
@@ -620,22 +732,60 @@ class CompanyIntelligenceScraper:
             except Exception as e:
                 print(f"   ⚠️  Provided newsroom URL failed: {e}")
         
-        # Auto-discover newsroom
-        candidates = build_newsroom_candidates(self.domain)
-        
-        for candidate_url in candidates[:6]:  # Check top 6
+        # ==================================================
+        # STRATEGY 2: Google Search API (BEST!)
+        # ==================================================
+        if self.search_client.enabled:
+            print(f"   🔍 Using Google Search API to find newsroom...")
             try:
-                response = requests.head(candidate_url, headers=HEADERS, timeout=5, allow_redirects=True)
+                # Search for newsroom/press pages
+                search_results = self.search_client.search(
+                    query=f'"{self.company_name}" (newsroom OR "press releases" OR news) site:{self.domain}',
+                    num_results=5
+                )
                 
-                if response.status_code < 400:
-                    print(f"   ✓ Found newsroom: {candidate_url}")
-                    items = self._scrape_newsroom_rss_or_index(candidate_url)
-                    sources.extend(items)
+                if search_results:
+                    print(f"   ✓ Google Search found {len(search_results)} newsroom candidates")
                     
-                    if items:
-                        return sources  # Found newsroom, stop
-            except Exception:
-                continue
+                    for result in search_results[:3]:  # Top 3 results
+                        url = result['link']
+                        try:
+                            print(f"      Testing: {url[:60]}...")
+                            items = self._scrape_newsroom_rss_or_index(url)
+                            sources.extend(items)
+                            
+                            if items:
+                                print(f"      ✓ SUCCESS! Found {len(items)} newsroom items")
+                                return sources
+                        except Exception as e:
+                            print(f"      ✗ Failed: {str(e)[:50]}")
+                            continue
+                else:
+                    print(f"   ⚠️  Google Search found no newsroom pages")
+            except Exception as e:
+                print(f"   ⚠️  Google Search failed: {str(e)[:80]}")
+                self.stats["errors"].append(f"Search API Newsroom failed: {e}")
+        
+        # ==================================================
+        # STRATEGY 3: URL Guessing (FALLBACK)
+        # ==================================================
+        if not sources:
+            print(f"   📍 Falling back to URL guessing...")
+            candidates = build_newsroom_candidates(self.domain)
+            
+            for candidate_url in candidates[:6]:  # Check top 6
+                try:
+                    response = requests.head(candidate_url, headers=HEADERS, timeout=5, allow_redirects=True)
+                    
+                    if response.status_code < 400:
+                        print(f"      ✓ Found newsroom: {candidate_url}")
+                        items = self._scrape_newsroom_rss_or_index(candidate_url)
+                        sources.extend(items)
+                        
+                        if items:
+                            return sources  # Found newsroom, stop
+                except Exception:
+                    continue
         
         return sources
     

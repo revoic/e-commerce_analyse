@@ -23,6 +23,9 @@ python-dateutil>=2.8.2
 # OpenAI
 openai>=1.30.0
 
+# Google Search API
+google-api-python-client>=2.100.0
+
 # Database
 sqlalchemy>=2.0.0
 psycopg2-binary>=2.9.0
