@@ -87,6 +87,7 @@ class SignalExtractor:
             'validation_failures': 0,
             'api_errors': 0
         }
+        self.error_log = []  # Track actual error messages
     
     def extract_from_article(
         self,
@@ -164,6 +165,12 @@ class SignalExtractor:
         
         except Exception as e:
             self.stats['api_errors'] += 1
+            # Log the actual error for debugging
+            error_msg = f"API Error: {type(e).__name__}: {str(e)}"
+            if not hasattr(self, 'error_log'):
+                self.error_log = []
+            self.error_log.append(error_msg)
+            print(f"❌ {error_msg}")  # Print to console for debugging
             # Return empty list on error (graceful degradation)
             return []
     
@@ -210,7 +217,11 @@ class SignalExtractor:
     
     def get_stats(self) -> dict:
         """Get extraction statistics."""
-        return self.stats.copy()
+        stats = self.stats.copy()
+        # Include error details if any
+        if hasattr(self, 'error_log') and self.error_log:
+            stats['error_details'] = self.error_log
+        return stats
 
 
 # ==============================================================================
